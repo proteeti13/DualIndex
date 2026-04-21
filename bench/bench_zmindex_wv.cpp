@@ -9,9 +9,9 @@
  * "flattened-1D" baseline, contrasted with true-3D learned indexes
  * (RSMI3D, LISA, Flood) tested on the same Wiki-Vote dataset.
  *
- * Data files expected (already in build/data/ from the Flood benchmark run)
- *   build/data/wiki_1m_points.tpie       – 1 000 000 × 3 doubles (TPIE)
- *   build/data/wiki_1m_queries_100k.bin  – 100 000 × 3 doubles (raw binary)
+ * Data files expected
+ *   datasets/wiki_vote_triples.txt   – space-separated SourceID Hop1_ID Hop2_ID [offset]
+ *   Queries are sampled from the dataset (no separate query file needed).
  *
  * Offset column in wiki_vote_triples.txt
  * ──────────────────────────────────────
@@ -25,14 +25,13 @@
  *
  * Usage
  * ─────
- *   bench_zmindex_wv <tpie_file> <query_bin> <N>
- *                   [--queries Q]
+ *   bench_zmindex_wv <txt_file> <N>
+ *                   [--queries Q] [--seed S]
  *                   [--out_csv FILE]
  *
  * Example
  *   build/bin/bench_zmindex_wv \
- *     build/data/wiki_1m_points.tpie \
- *     build/data/wiki_1m_queries_100k.bin \
+ *     datasets/wiki_vote_triples.txt \
  *     1000000 --queries 100000 \
  *     --out_csv build/results/zmindex_wikivote.csv
  */
@@ -46,11 +45,13 @@
 #include <iomanip>
 #include <iostream>
 #include <numeric>
+#include <random>
+#include <sstream>
 #include <string>
 #include <vector>
 
-#include <tpie/file_stream.h>
 #include <tpie/tpie.h>
+#include <tpie/file_stream.h>
 
 // ZMIndex<Dim, Epsilon> — provides point_lookup(Point&) → PointQueryResult
 #include "../indexes/learned/zmindex.hpp"
@@ -62,6 +63,11 @@ using Point3 = point_t<DIM>;
 using ZM3    = bench::index::ZMIndex<DIM, EPSI>;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+static bool ends_with(const std::string& s, const std::string& suffix) {
+    return s.size() >= suffix.size() &&
+           s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 static void load_tpie(const std::string& fname,
                       std::vector<Point3>& pts, size_t N) {
@@ -78,44 +84,74 @@ static void load_tpie(const std::string& fname,
     tpie::tpie_finish();
 }
 
-// Query file: Q × DIM doubles stored as raw little-endian doubles
-static void load_queries(const std::string& fname,
-                         std::vector<Point3>& qpts, size_t Q) {
-    qpts.resize(Q);
-    std::ifstream f(fname, std::ios::binary);
-    if (!f) {
-        std::cerr << "ERROR: cannot open query file: " << fname << "\n";
-        std::exit(1);
+static void load_text(const std::string& fname,
+                      std::vector<Point3>& pts, size_t N) {
+    pts.reserve(N);
+    std::ifstream f(fname);
+    if (!f) { std::cerr << "ERROR: cannot open " << fname << "\n"; std::exit(1); }
+    std::string line;
+    size_t loaded = 0;
+    while (loaded < N && std::getline(f, line)) {
+        if (line.empty()) continue;
+        std::istringstream ss(line);
+        Point3 p;
+        double v;
+        for (size_t d = 0; d < DIM; ++d) {
+            if (!(ss >> v)) {
+                std::cerr << "ERROR: short row at line " << (loaded + 1) << "\n";
+                std::exit(1);
+            }
+            p[d] = v;
+        }
+        pts.push_back(p);
+        ++loaded;
     }
-    f.read(reinterpret_cast<char*>(qpts.data()), Q * DIM * sizeof(double));
-    if (!f) {
-        std::cerr << "ERROR: short read on query file (expected "
-                  << Q * DIM * sizeof(double) << " bytes)\n";
-        std::exit(1);
+    if (loaded < N)
+        std::cerr << "WARNING: requested " << N << " rows but file has only " << loaded << "\n";
+}
+
+static void load_points(const std::string& fname,
+                        std::vector<Point3>& pts, size_t N) {
+    if (ends_with(fname, ".tpie")) {
+        std::cout << "[load] TPIE binary: " << fname << "\n";
+        load_tpie(fname, pts, N);
+    } else {
+        std::cout << "[load] text file:   " << fname << "\n";
+        load_text(fname, pts, N);
     }
+}
+
+static std::vector<Point3> sample_queries(const std::vector<Point3>& pts,
+                                          size_t Q, uint64_t seed) {
+    std::mt19937_64 rng(seed);
+    std::uniform_int_distribution<size_t> dist(0, pts.size() - 1);
+    std::vector<Point3> qpts(Q);
+    for (auto& q : qpts) q = pts[dist(rng)];
+    return qpts;
 }
 
 static void print_usage(const char* prog) {
     std::cerr << "Usage: " << prog
-              << " <tpie_file> <query_bin> <N>"
-              << " [--queries Q]"
+              << " <file.(txt|tpie)> <N>"
+              << " [--queries Q] [--seed S]"
               << " [--out_csv FILE]\n";
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
-    if (argc < 4) { print_usage(argv[0]); return 1; }
+    if (argc < 3) { print_usage(argv[0]); return 1; }
 
-    const std::string tpie_file  = argv[1];
-    const std::string query_file = argv[2];
-    const size_t      N          = std::stoull(argv[3]);
-    size_t            Q          = 100000;
+    const std::string txt_file = argv[1];  // accepts .txt or .tpie
+    const size_t      N        = std::stoull(argv[2]);
+    size_t            Q        = 100000;
+    uint64_t          seed     = 42;
     std::string       out_csv;
 
-    for (int i = 4; i + 1 < argc; ++i) {
+    for (int i = 3; i + 1 < argc; ++i) {
         std::string arg = argv[i];
         if      (arg == "--queries") Q       = std::stoull(argv[i + 1]);
+        else if (arg == "--seed")    seed    = std::stoull(argv[i + 1]);
         else if (arg == "--out_csv") out_csv = argv[i + 1];
     }
 
@@ -123,8 +159,7 @@ int main(int argc, char** argv) {
     std::cout << "====================================================\n"
               << "  ZM-Index — Wiki-Vote 3D graph-key benchmark\n"
               << "====================================================\n"
-              << "  Dataset  : " << tpie_file << "\n"
-              << "  Queries  : " << query_file << "\n"
+              << "  Dataset  : " << txt_file << "\n"
               << "  N        : " << N << "\n"
               << "  Q        : " << Q << "\n"
               << "  Epsilon  : " << EPSI << "\n"
@@ -134,15 +169,13 @@ int main(int argc, char** argv) {
 
     // ── 1. load data ─────────────────────────────────────────────────────────
     std::vector<Point3> points;
-    load_tpie(tpie_file, points, N);
+    load_points(txt_file, points, N);
     std::cout << "[1] Loaded " << points.size() << " 3-D points.\n";
 
-    // ── 2. load query workload ────────────────────────────────────────────────
-    std::vector<Point3> queries;
-    load_queries(query_file, queries, Q);
-    // Clamp Q to actual file size
+    // ── 2. sample query workload from dataset ─────────────────────────────────
+    std::vector<Point3> queries = sample_queries(points, Q, seed);
     Q = queries.size();
-    std::cout << "[2] Loaded " << Q << " query points.\n";
+    std::cout << "[2] Sampled " << Q << " query points (seed=" << seed << ").\n";
 
     // ── 3. build ZMIndex ──────────────────────────────────────────────────────
     std::cout << "[3] Building ZMIndex<" << DIM << ", " << EPSI << "> ...\n";

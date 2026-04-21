@@ -1,7 +1,6 @@
 #pragma once
 
 #include "type.hpp"
-#include "datautils.hpp"
 #include <array>
 #ifdef __linux__
 #include <bits/types/struct_rusage.h>

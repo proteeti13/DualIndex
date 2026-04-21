@@ -16,30 +16,24 @@ option(PROFILE "whether starting heap profile" OFF)
 option(RSMI "whether building RSMI" OFF)
 
 
-set(BOOST_ROOT "/opt/homebrew/opt/boost")
-set(Boost_INCLUDE_DIR "/opt/homebrew/opt/boost/include")
-set(Boost_LIBRARY_DIR "/opt/homebrew/opt/boost/lib")
+set(BOOST_ROOT "/usr/local/boost")
+set(Boost_INCLUDE_DIR "/usr/local/boost/include")
+set(Boost_LIBRARY_DIR "/usr/local/boost/lib")
 
 SET(EXECUTABLE_OUTPUT_PATH "${CMAKE_BINARY_DIR}/bin")
 
-# check dependencies
-set(TPIE_FOUND TRUE)
-# Use TPIE from your local build - headers AND library from same source for consistency
-set(TPIE_SOURCE_DIR "/Users/proteetiprovarawshan/tpie")
-set(TPIE_BUILD_DIR "/Users/proteetiprovarawshan/tpie/build")
-set(TPIE_LIBRARIES "${TPIE_BUILD_DIR}/tpie/libtpie.a")
-set(TPIE_INCLUDE_DIRS "${TPIE_SOURCE_DIR}" "${TPIE_BUILD_DIR}")
-# Fallback to /usr/local/lib if build folder library doesn't exist
-if(NOT EXISTS ${TPIE_LIBRARIES})
-  set(TPIE_LIBRARIES "/usr/local/lib/libtpie.a")
-  message(STATUS "Using TPIE library from /usr/local/lib (fallback)")
-else()
-  message(STATUS "Using TPIE library from build folder: ${TPIE_LIBRARIES}")
-endif()
-include_directories(${TPIE_INCLUDE_DIRS})
-#find_package(Boost 1.79.0 REQUIRED COMPONENTS program_options system filesystem)
+# TPIE — installed locally to $HOME/local (built from source, no sudo needed)
+# tpie_export.h is a generated file that stays in the build tree, so include both.
+set(TPIE_INCLUDE_DIRS
+    "$ENV{HOME}/local/include"
+    "$ENV{HOME}/tpie/build"
+)
+set(TPIE_LIBRARIES
+    "$ENV{HOME}/local/lib/libtpie.a"
+    "/usr/lib/x86_64-linux-gnu/libsnappy.a"
+)
+
 find_package(Boost REQUIRED COMPONENTS program_options)
-find_package(GEOS REQUIRED)
 
 if(PROFILE)
   find_package(benchmark REQUIRED)
@@ -90,21 +84,14 @@ if(RSMI)
   endif()
 
 else()
-  # the other benchmarks are compiled using cxx17 (required by PGM-Index)
+  # Thesis benchmarks — C++17 required by PGM-Index
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-  # ANN library path
-  set(ANN_PATH "${CMAKE_SOURCE_DIR}/learnedbench/indexes/ann_1.1.2")
-
-  include_directories(${Boost_INCLUDE_DIR} ${TPIE_INCLUDE_DIRS} ${RSMI_PATH} ${ANN_PATH})
-
-  add_executable(datagen utils/datagen.cpp)
-  target_link_libraries(datagen ${TPIE_LIBRARIES} Boost::program_options pthread)
+  include_directories(${Boost_INCLUDE_DIR} ${TPIE_INCLUDE_DIRS})
 
   if(PROFILE)
-    add_executable(bench2d_hp bench/bench.cpp)
-    target_link_libraries(bench2d_hp ${TPIE_LIBRARIES} Boost::program_options GEOS::geos pthread "${ANN_PATH}/lib/libANN.a" -ltcmalloc)
+    message(STATUS "PROFILE mode: no heap-profiling targets defined for thesis benchmarks")
   else()
     # add_executable(bench2d_default bench/bench.cpp)
     # target_link_libraries(bench2d_default ${TPIE_LIBRARIES} Boost::program_options GEOS::geos pthread "${ANN_PATH}/lib/libANN.a")
@@ -214,37 +201,27 @@ else()
     # target_link_libraries(bench3d_e1024_toronto ${TPIE_LIBRARIES} Boost::program_options GEOS::geos pthread "${ANN_PATH}/lib/libANN.a")
     # target_compile_definitions(bench3d_e1024_toronto PUBLIC BENCH_DIM=3 PARTITION_NUM=20 INDEX_ERROR_THRESHOLD=1024)
 
-    add_executable(bench2d_default bench/bench.cpp)
-    target_link_libraries(bench2d_default ${TPIE_LIBRARIES} Boost::program_options GEOS::geos pthread "${ANN_PATH}/lib/libANN.a")
-    target_compile_definitions(bench2d_default PUBLIC PARTITION_NUM=100)
+    # ── ZM-Index benchmarks ───────────────────────────────────────────────────
+    # -mbmi2 required: MortonNDBmi and MultidimensionalPGMIndex are guarded by
+    # #ifdef MORTON_ND_BMI2_ENABLED which is only set when __BMI2__ is defined.
+    add_executable(bench_zmindex_all bench/bench_zmindex_all.cpp)
+    target_compile_options(bench_zmindex_all PRIVATE -mbmi2)
+    target_link_libraries(bench_zmindex_all pthread)
 
-    add_executable(bench3d_toronto bench/bench.cpp)
-    target_link_libraries(bench3d_toronto ${TPIE_LIBRARIES} Boost::program_options GEOS::geos pthread "${ANN_PATH}/lib/libANN.a")
-    target_compile_definitions(bench3d_toronto PUBLIC BENCH_DIM=3 PARTITION_NUM=20)
+    # bench_zmindex_wv and bench_flood_wiki support both .txt and .tpie input
+    add_executable(bench_zmindex_wv bench/bench_zmindex_wv.cpp)
+    target_compile_options(bench_zmindex_wv PRIVATE -mbmi2)
+    target_link_libraries(bench_zmindex_wv ${TPIE_LIBRARIES} pthread)
 
+    # ── Flood benchmark ───────────────────────────────────────────────────────
     add_executable(bench_flood_wiki bench/bench_flood_wiki.cpp)
-    target_link_libraries(bench_flood_wiki ${TPIE_LIBRARIES} Boost::program_options GEOS::geos pthread "${ANN_PATH}/lib/libANN.a")
     target_compile_options(bench_flood_wiki PRIVATE -mbmi2)
+    target_link_libraries(bench_flood_wiki ${TPIE_LIBRARIES} pthread)
 
-    
+    # ── Dataset converter ─────────────────────────────────────────────────────
+    # Converts space-separated text triples to TPIE binary format for fast loading
+    add_executable(csv_to_tpie tools/txt_to_tpie.cpp)
+    target_link_libraries(csv_to_tpie ${TPIE_LIBRARIES} pthread)
+
   endif()
 endif()
-
-# --- Data Converter Tool ---
-# --- Data Converter Tool ---
-add_executable(convert_data convert_data.cpp)
-
-# 1. Tell Linker to look in Homebrew's folder
-if(APPLE)
-  target_link_directories(convert_data PRIVATE "/opt/homebrew/lib")
-endif()
-
-# 2. Link the libraries
-target_link_libraries(convert_data
-        ${TPIE_LIBRARIES}
-        "snappy"      # CMake will now find this in /opt/homebrew/lib
-        "pthread"
-)
-
-# 3. Include headers
-target_include_directories(convert_data PRIVATE ${TPIE_INCLUDE_DIRS})

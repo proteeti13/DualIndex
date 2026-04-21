@@ -80,15 +80,17 @@ struct PointQueryResult {
 };
 
 // Exact point lookup (used by bench_zmindex_wv).
-// 3D key → grid cell IDs → Morton code → PGM search → binary-search [lo,hi).
+// 3D key → grid cell IDs → Morton code → PGM contains() → result.
+// pgm_window is constant 2*Epsilon+2 (PGM guarantee); actual per-query
+// window is inaccessible through the MultidimensionalPGMIndex public API.
 PointQueryResult point_lookup(Point& q) {
     auto start = std::chrono::steady_clock::now();
     auto q_tup = a2t(q);
-    auto [found, window] = pgm_idx->point_query(q_tup);
+    bool found = pgm_idx->contains(q_tup);
     auto end = std::chrono::steady_clock::now();
     point_time += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     point_count++;
-    return {found, window};
+    return {found, 2 * Epsilon + 2};
 }
 
 Points range_query(Box& box) {
