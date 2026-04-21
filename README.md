@@ -1,5 +1,5 @@
 # DualIndex
-Unified Indexing architecture; combines two specialized learned indexes under a unified query router. It routes point queries to [ZM-Index](https://ieeexplore.ieee.org/document/8788832) and range queries to [Flood](https://arxiv.org/abs/1912.01668)
+Unified Indexing architecture; combines two specialized learned indexes under a unified query router. It routes point queries to [ZM-Index](https://ieeexplore.ieee.org/document/8788832) and range queries to [Flood](https://arxiv.org/abs/1912.01668).Still under construction - as a part of my Master Thesis.
 
 ## Data Model
 `(SourceID, Hop1_ID, Hop2_ID) → Offset`
