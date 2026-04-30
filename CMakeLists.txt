@@ -218,6 +218,16 @@ else()
     target_compile_options(bench_flood_wiki PRIVATE -mbmi2)
     target_link_libraries(bench_flood_wiki ${TPIE_LIBRARIES} pthread)
 
+    # ── Graph query benchmark (point / single_hop / multi_hop) ───────────────
+    add_executable(bench_zmindex_graph_queries bench/bench_zmindex_graph_queries.cpp)
+    target_compile_options(bench_zmindex_graph_queries PRIVATE -mbmi2)
+    target_link_libraries(bench_zmindex_graph_queries ${TPIE_LIBRARIES} pthread)
+
+    # ── DualIndex Router ─────────────────────────────────────────────────────
+    add_executable(bench_router bench/bench_router.cpp)
+    target_compile_options(bench_router PRIVATE -mbmi2)
+    target_link_libraries(bench_router ${TPIE_LIBRARIES} pthread)
+
     # ── Dataset converter ─────────────────────────────────────────────────────
     # Converts space-separated text triples to TPIE binary format for fast loading
     add_executable(csv_to_tpie tools/txt_to_tpie.cpp)

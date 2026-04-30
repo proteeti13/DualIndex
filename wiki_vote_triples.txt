@@ -1,1 +1,0 @@
-/home/proteeti/RSMI/datasets/wiki_vote_triples.txt

@@ -165,6 +165,16 @@ inline size_t get_resolution() {
     return this->resolution;
 }
 
+// Expose grid internals for external verbose/trace output
+inline std::array<size_t, Dim> point_to_cells(const Point& p) const {
+    std::array<size_t, Dim> cells;
+    for (size_t i = 0; i < Dim; ++i) cells[i] = to_id_const(p[i], i);
+    return cells;
+}
+inline const std::array<double, Dim>& get_mins()   const { return mins; }
+inline const std::array<double, Dim>& get_maxs()   const { return maxs; }
+inline const std::array<double, Dim>& get_widths() const { return widths; }
+
 private:
 // the grid resolution to compute the z address
 // by default, it is set to N^{1/d}
@@ -181,12 +191,13 @@ Index* pgm_idx;
 
 // turn a double point to ints to compute the z-value
 inline size_t to_id(double val, size_t I) {
-    if (val <= this->mins[I]) {
-        return 0;
-    }
-    if (val >= this->maxs[I]) {
-        return (this->maxs[I] - this->mins[I]) / this->widths[I];
-    }
+    if (val <= this->mins[I]) return 0;
+    if (val >= this->maxs[I]) return (this->maxs[I] - this->mins[I]) / this->widths[I];
+    return static_cast<size_t>((val - this->mins[I])/this->widths[I]);
+}
+inline size_t to_id_const(double val, size_t I) const {
+    if (val <= this->mins[I]) return 0;
+    if (val >= this->maxs[I]) return (this->maxs[I] - this->mins[I]) / this->widths[I];
     return static_cast<size_t>((val - this->mins[I])/this->widths[I]);
 }
 
