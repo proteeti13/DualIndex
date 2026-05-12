@@ -233,5 +233,18 @@ else()
     add_executable(csv_to_tpie tools/txt_to_tpie.cpp)
     target_link_libraries(csv_to_tpie ${TPIE_LIBRARIES} pthread)
 
+    # ── ART baseline (third_party/libart) ─────────────────────────────────────
+    # Non-ML baseline for thesis comparison. Same binary handles both ART and a
+    # sorted-array + binary-search "dumbest baseline" floor.
+    # No -mbmi2 (ART doesn't use BMI2), no TPIE link (text input only).
+    add_executable(bench_art_baseline
+        bench/bench_art_baseline.cpp
+        third_party/libart/src/art.c)
+    target_include_directories(bench_art_baseline PRIVATE third_party/libart/src)
+    target_link_libraries(bench_art_baseline pthread)
+    # Build art.c with the same optimization as the C++ side for a fair comparison.
+    set_source_files_properties(third_party/libart/src/art.c PROPERTIES
+        COMPILE_FLAGS "-O3 -DNDEBUG -std=c99")
+
   endif()
 endif()
