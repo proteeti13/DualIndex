@@ -41,7 +41,10 @@
 #include <vector>
 
 static constexpr size_t DIM = 3;
-static constexpr size_t K   = 20;
+// K=4: the router now uses FloodSourceSort (SourceID sort dim), whose optimal K
+// is small (2-4) because scans are exact and extra grid cells are pure overhead.
+// (Stock Flood preferred K=20; that guidance inverts with the new sort dimension.)
+static constexpr size_t K   = 4;
 static constexpr size_t EPS = 64;
 
 using Point  = point_t<DIM>;

@@ -5,16 +5,25 @@
 #include <vector>
 
 #include "learned/zmindex.hpp"
-#include "learned/flood.hpp"
+#include "learned/flood_sortsource.hpp"   // active range index (SourceID as sort dim)
+// #include "learned/flood.hpp"           // stock Flood (sorts on Hop2) — kept as baseline
 #include "../utils/type.hpp"
 
 // DualIndexRouter — routes queries to the correct learned index.
 //
 //   Point query  (all dims pinned, min == max in every dim)  → ZMIndex::point_lookup
-//   Range query  (at least one dim open, min < max)          → Flood::range_query
+//   Range query  (at least one dim open, min < max)          → FloodSourceSort::range_query
+//
+// Range queries are served by FloodSourceSort — the Flood variant that uses
+// SourceID (dim 0) as the sort dimension. Our experiments showed the stock Flood
+// layout (sort on the last dim, Hop2) is 13–3,536x slower than ART on graph
+// traversal because SourceID — which every query filters — could not get exact
+// refinement. Sorting on SourceID makes single-hop beat ART and multi-hop
+// competitive, 15–4,036x faster than stock Flood. The stock Flood remains on
+// disk (indexes/learned/flood.hpp) as the comparison baseline.
 //
 // Both indexes are built from independent copies of the input data so that
-// Flood's in-place sort of its data copy does not affect ZM-Index's view.
+// FloodSourceSort's in-place sort of its data copy does not affect ZM-Index's view.
 // The owned copies are stored as member variables so references held by the
 // indexes remain valid for the lifetime of the router.
 
@@ -27,7 +36,7 @@ public:
     using Points = std::vector<Point>;
     using Box    = box_t<Dim>;
     using ZM     = ZMIndex<Dim, Eps>;
-    using FL     = Flood<Dim, K, Eps>;
+    using FL     = FloodSourceSort<Dim, K, Eps>;   // was Flood<Dim,K,Eps> (stock, baseline)
 
     enum class Route { ZM_INDEX, FLOOD };
 

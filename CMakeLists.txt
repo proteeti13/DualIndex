@@ -246,5 +246,24 @@ else()
     set_source_files_properties(third_party/libart/src/art.c PROPERTIES
         COMPILE_FLAGS "-O3 -DNDEBUG -std=c99")
 
+    # ── Flood K-sensitivity sweep ─────────────────────────────────────────────
+    # K is a compile-time template parameter, so one executable is built per K
+    # value via the FLOOD_K macro. Used to find the optimal grid resolution for
+    # graph traversal workloads (small result sets) vs Flood's OLAP default K=20.
+    foreach(K_VAL 2 3 4 6 8 10 15 16 20)
+        add_executable(bench_flood_k${K_VAL} bench/bench_flood_k_sensitivity.cpp)
+        target_compile_options(bench_flood_k${K_VAL} PRIVATE -mbmi2 -DFLOOD_K=${K_VAL})
+        target_link_libraries(bench_flood_k${K_VAL} ${TPIE_LIBRARIES} pthread)
+    endforeach()
+
+    # ── Flood with SourceID as the sort dimension (graph-tuned variant) ────────
+    # Tests Flood paper §4's primary lever (sort-dimension choice) rather than K.
+    # Uses indexes/learned/flood_sortsource.hpp. One executable per K value.
+    foreach(K_VAL 2 4 8 16 20)
+        add_executable(bench_flood_ss_k${K_VAL} bench/bench_flood_sortsource.cpp)
+        target_compile_options(bench_flood_ss_k${K_VAL} PRIVATE -mbmi2 -DFLOOD_K=${K_VAL})
+        target_link_libraries(bench_flood_ss_k${K_VAL} ${TPIE_LIBRARIES} pthread)
+    endforeach()
+
   endif()
 endif()
