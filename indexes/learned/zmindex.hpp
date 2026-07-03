@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <chrono>
 #include <cmath>
+#include <numeric>
+#include <algorithm>
+#include <tuple>
 
 #include "../base_index.hpp"
 #include "../../utils/type.hpp"
@@ -61,6 +64,35 @@ ZMIndex(Points& points) : _data(points) {
     
     pgm_idx = new Index(tuples.begin(), tuples.end());
 
+    // ---- v3 exact refinement: parallel-sort coordinates by Morton code ----
+    // Build a true 1-D Morton-code PGM and keep the coordinate array sorted in
+    // the SAME order. point_lookup predicts a position with the learned model,
+    // then refines by scanning the local run of equal Morton codes comparing
+    // exact 3-D coordinates -- the canonical "model predicts, local search
+    // verifies" learned-index pattern. No auxiliary membership structure: the
+    // sorted coordinate array IS the index payload. _data is reordered in place,
+    // which is safe here -- range_query/knn use pgm_idx (built from an
+    // independent copy above) and only count() reads _data.
+    const size_t n = _data.size();
+    std::vector<uint64_t> codes(n);
+    for (size_t i = 0; i < n; ++i) codes[i] = morton_code(_data[i]);
+
+    std::vector<size_t> order(n);
+    std::iota(order.begin(), order.end(), size_t(0));
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return codes[a] < codes[b]; });
+
+    Points sorted_pts(n);
+    std::vector<uint64_t> sorted_codes(n);
+    for (size_t i = 0; i < n; ++i) {
+        sorted_pts[i]   = _data[order[i]];
+        sorted_codes[i] = codes[order[i]];
+    }
+    std::swap(_data, sorted_pts);                 // _data now in Morton order
+    morton_pgm_ = new pgm::PGMIndex<uint64_t, Epsilon>(sorted_codes);
+    // codes / order / sorted_pts / sorted_codes are freed at scope end; only the
+    // tiny 1-D PGM and the (reordered, pre-existing) _data array remain.
+
     auto end = std::chrono::steady_clock::now();
     build_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     std::cout << "Build Time: " << get_build_time() << " [ms]" << std::endl;
@@ -69,6 +101,7 @@ ZMIndex(Points& points) : _data(points) {
 
 ~ZMIndex() {
     delete this->pgm_idx;
+    delete this->morton_pgm_;
 }
 
 // Result type for thesis-style point lookup.
@@ -79,18 +112,45 @@ struct PointQueryResult {
     size_t pgm_window;
 };
 
-// Exact point lookup (used by bench_zmindex_wv).
-// 3D key → grid cell IDs → Morton code → PGM contains() → result.
-// pgm_window is constant 2*Epsilon+2 (PGM guarantee); actual per-query
-// window is inaccessible through the MultidimensionalPGMIndex public API.
+// Exact point lookup. 3D key -> grid cell IDs -> Morton code -> 1-D PGM predicts
+// the position in the Morton-sorted coordinate array -> local scan over the run
+// of equal Morton codes, comparing exact 3-D coordinates.
+//
+// Correctness: a real point's Morton code is present, so the PGM error bound
+// locates its first occurrence within [lo, hi); we lower_bound there and then
+// scan FORWARD over the whole equal-Morton run (which a dense grid cell can
+// stretch beyond a fixed error window) until the code changes -- so no real
+// match is ever missed (no false negatives). Distinct points that merely share
+// a Morton cell fail the exact coordinate compare, so there are no false
+// positives either. pgm_window reports the actual predicted error window.
 PointQueryResult point_lookup(Point& q) {
     auto start = std::chrono::steady_clock::now();
-    auto q_tup = a2t(q);
-    bool found = pgm_idx->contains(q_tup);
+
+    const uint64_t m = morton_code(q);
+    const size_t n = _data.size();
+    auto ap = morton_pgm_->search(m);
+    size_t lo = ap.lo < n ? ap.lo : n;
+    size_t hi = ap.hi < n ? ap.hi : n;
+    if (lo > hi) lo = hi;
+
+    // learned-model-guided locate: first entry with Morton code >= m in [lo, hi)
+    auto cmp = [this](const Point& pt, uint64_t key) { return this->morton_code(pt) < key; };
+    size_t i = std::lower_bound(_data.begin() + lo, _data.begin() + hi, m, cmp) - _data.begin();
+
+    bool found = false;
+    for (size_t pos = i; pos < n; ++pos) {
+        if (morton_code(_data[pos]) != m) break;   // past the equal-Morton run
+        bool eq = true;
+        for (size_t d = 0; d < Dim; ++d) {
+            if (_data[pos][d] != q[d]) { eq = false; break; }
+        }
+        if (eq) { found = true; break; }
+    }
+
     auto end = std::chrono::steady_clock::now();
     point_time += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     point_count++;
-    return {found, 2 * Epsilon + 2};
+    return {found, hi - lo};
 }
 
 Points range_query(Box& box) {
@@ -154,11 +214,15 @@ inline size_t count() {
     return _data.size();
 }
 
-// index size in Bytes
-// pgm index only compute the space cost of line segments
-// to make it fair, we add the size of index payloads, i.e., ids (pointers) of each point
+// index size in Bytes.
+// v3 reports the honest footprint of the point-query path: the multidimensional
+// PGM (used by range/knn), the 1-D Morton PGM, and the Morton-sorted coordinate
+// array that serves as the refinement payload (replaces the v2 hash set, which
+// was ~290 MB and uncounted). sizeof(Point) = Dim*8 B.
 inline size_t index_size() {
-    return pgm_idx->size_in_bytes() + count() * sizeof(size_t);
+    return pgm_idx->size_in_bytes()
+         + (morton_pgm_ ? morton_pgm_->size_in_bytes() : 0)
+         + count() * sizeof(Point);
 }
 
 inline size_t get_resolution() {
@@ -184,10 +248,19 @@ std::array<double, Dim> mins;
 std::array<double, Dim> maxs;
 std::array<double, Dim> widths;
 
-// internal data
+// internal data (reordered into Morton-code order during construction)
 Points& _data;
-// internal pgm index
+// internal multidimensional pgm index (range / knn)
 Index* pgm_idx;
+// 1-D PGM over the Morton codes of _data, in the same sorted order (point lookup)
+pgm::PGMIndex<uint64_t, Epsilon>* morton_pgm_ = nullptr;
+
+// encode a point into its single 64-bit Morton code via the per-dim grid cells
+inline uint64_t morton_code(const Point& p) {
+    return std::apply(
+        [](auto... xs) { return morton::Encode(static_cast<uint64_t>(xs)...); },
+        a2t(p));
+}
 
 // turn a double point to ints to compute the z-value
 inline size_t to_id(double val, size_t I) {
