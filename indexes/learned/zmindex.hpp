@@ -19,8 +19,13 @@
 
 namespace bench { namespace index {
 
-// Epsilon: the error bound of the underlying 1-D learned index
-template<size_t Dim, size_t Epsilon=64>
+// Epsilon:    the error bound of the underlying 1-D learned index
+// BuildRange: when true (default, standalone ZM-Index) the constructor also
+//             builds the MultidimensionalPGMIndex used by range_query / knn_query.
+//             DualIndex routes all range/kNN queries to FloodSourceSort and only
+//             ever calls point_lookup, so it instantiates with BuildRange=false to
+//             skip that unused structure (saving build time and memory).
+template<size_t Dim, size_t Epsilon=64, bool BuildRange=true>
 class ZMIndex : public BaseIndex {
 
 using Point = point_t<Dim>;
@@ -56,13 +61,16 @@ ZMIndex(Points& points) : _data(points) {
         widths[i] = (maxs[i] - mins[i]) / this->resolution;
     }
 
-    std::vector<value_type> tuples;
-    tuples.reserve(points.size());
-    for (auto& p: points) {
-        tuples.emplace_back(a2t(p));
+    // Multidimensional PGM (range / kNN). Skipped entirely when BuildRange=false
+    // (DualIndex point-only path) -- this is the "unused index" removal.
+    if constexpr (BuildRange) {
+        std::vector<value_type> tuples;
+        tuples.reserve(points.size());
+        for (auto& p: points) {
+            tuples.emplace_back(a2t(p));
+        }
+        pgm_idx = new Index(tuples.begin(), tuples.end());
     }
-    
-    pgm_idx = new Index(tuples.begin(), tuples.end());
 
     // ---- v3 exact refinement: parallel-sort coordinates by Morton code ----
     // Build a true 1-D Morton-code PGM and keep the coordinate array sorted in
@@ -100,7 +108,7 @@ ZMIndex(Points& points) : _data(points) {
 }
 
 ~ZMIndex() {
-    delete this->pgm_idx;
+    delete this->pgm_idx;        // nullptr when BuildRange=false -- safe
     delete this->morton_pgm_;
 }
 
@@ -154,6 +162,9 @@ PointQueryResult point_lookup(Point& q) {
 }
 
 Points range_query(Box& box) {
+    static_assert(BuildRange,
+        "range_query requires BuildRange=true; this ZM-Index was built point-only "
+        "(DualIndex routes range queries to FloodSourceSort).");
     auto start = std::chrono::steady_clock::now();
 
     auto min_tup = a2t(box.min_corner());
@@ -183,6 +194,8 @@ Points range_query(Box& box) {
 
 // this is approx knn not exact knn
 Points knn_query(Point& q, size_t k) {
+    static_assert(BuildRange,
+        "knn_query requires BuildRange=true; this ZM-Index was built point-only.");
     auto start = std::chrono::steady_clock::now();
 
     auto q_tup = a2t(q);
@@ -220,9 +233,11 @@ inline size_t count() {
 // array that serves as the refinement payload (replaces the v2 hash set, which
 // was ~290 MB and uncounted). sizeof(Point) = Dim*8 B.
 inline size_t index_size() {
-    return pgm_idx->size_in_bytes()
-         + (morton_pgm_ ? morton_pgm_->size_in_bytes() : 0)
-         + count() * sizeof(Point);
+    size_t bytes = (morton_pgm_ ? morton_pgm_->size_in_bytes() : 0)
+                 + count() * sizeof(Point);
+    // the multidimensional PGM contributes only when it was actually built
+    if constexpr (BuildRange) bytes += pgm_idx->size_in_bytes();
+    return bytes;
 }
 
 inline size_t get_resolution() {
@@ -250,8 +265,8 @@ std::array<double, Dim> widths;
 
 // internal data (reordered into Morton-code order during construction)
 Points& _data;
-// internal multidimensional pgm index (range / knn)
-Index* pgm_idx;
+// internal multidimensional pgm index (range / knn); nullptr when BuildRange=false
+Index* pgm_idx = nullptr;
 // 1-D PGM over the Morton codes of _data, in the same sorted order (point lookup)
 pgm::PGMIndex<uint64_t, Epsilon>* morton_pgm_ = nullptr;
 

@@ -35,7 +35,7 @@ public:
     using Point  = point_t<Dim>;
     using Points = std::vector<Point>;
     using Box    = box_t<Dim>;
-    using ZM     = ZMIndex<Dim, Eps>;
+    using ZM     = ZMIndex<Dim, Eps, /*BuildRange=*/false>; // point-only: range → Flood
     using FL     = FloodSourceSort<Dim, K, Eps>;   // was Flood<Dim,K,Eps> (stock, baseline)
 
     enum class Route { ZM_INDEX, FLOOD };
