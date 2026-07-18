@@ -82,6 +82,11 @@ public:
     double zm_index_mb()    { return zm_.index_size()    / 1e6; }
     double flood_index_mb() { return flood_.index_size() / 1e6; }
 
+    // Test support (parity checks): expose the router's own flood instance's
+    // range results so a harness can verify result-set CONTENTS, not just the
+    // count that query() reports. Read-only; does not affect routing/behavior.
+    Points range_results(Box& box) { return flood_.range_query(box); }
+
     static bool is_point(const Box& box) {
         for (size_t d = 0; d < Dim; ++d)
             if (box.min_corner()[d] != box.max_corner()[d]) return false;

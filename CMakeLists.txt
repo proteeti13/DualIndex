@@ -228,6 +228,11 @@ else()
     target_compile_options(bench_router PRIVATE -mbmi2)
     target_link_libraries(bench_router ${TPIE_LIBRARIES} pthread)
 
+    # ── Correctness parity check (final config, text input only) ─────────────
+    add_executable(parity_check bench/parity_check.cpp)
+    target_compile_options(parity_check PRIVATE -mbmi2)
+    target_link_libraries(parity_check pthread)
+
     # ── Dataset converter ─────────────────────────────────────────────────────
     # Converts space-separated text triples to TPIE binary format for fast loading
     add_executable(csv_to_tpie tools/txt_to_tpie.cpp)
