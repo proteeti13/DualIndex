@@ -20,6 +20,17 @@
 
 namespace bench { namespace index {
 
+#ifdef SCAN_DEBUG
+// Debug-only instrumentation (compiled out of the normal build). Counts the
+// number of entries actually inspected inside the cell-scan loop of
+// Bucket::search — one increment per point examined, BEFORE the is_in_box
+// filter. The benchmark harness resets this to 0, runs a query, and reads it
+// back to measure the true scan_overhead (examined / returned) and compare it
+// against the analytic formula. `inline thread_local` gives a single shared
+// counter across the (few) TUs compiled with -DSCAN_DEBUG.
+inline thread_local std::size_t g_scan_examined = 0;
+#endif
+
 // FloodSourceSort — a variant of Flood (flood.hpp) where dimension 0 (SourceID)
 // is the SORT dimension and the remaining dimensions (1 .. Dim-1) form the grid.
 //
@@ -102,6 +113,9 @@ class Bucket {
         while (i > 0 && std::get<SortDim>(_local_points[i - 1]) >= min_key) --i;
 
         for (; i < n && std::get<SortDim>(_local_points[i]) <= max_key; ++i) {
+#ifdef SCAN_DEBUG
+            ++bench::index::g_scan_examined;   // one entry examined in the cell scan
+#endif
             if (bench::common::is_in_box(this->_local_points[i], box)) {
                 result.emplace_back(this->_local_points[i]);
             }
